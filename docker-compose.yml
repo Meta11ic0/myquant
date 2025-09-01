@@ -1,0 +1,68 @@
+# quant/docker-compose.yml
+# NOTE: this file is for local/single-node development.
+# CHANGED: using non-HA TimescaleDB image (lighter for dev) - see comment below.
+version: "3.9"
+
+services:
+  db:
+    # CHANGED: use the single-node (lighter) TimescaleDB image suitable for dev
+    image: timescale/timescaledb:latest-pg16   # <-- lighter single-node image (dev)
+    container_name: quant-timescaledb
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      # CHANGED: keep conservative tuning for small VM
+      TS_TUNE_MEMORY: "256MB"     # give Timescale a small memory footprint
+      TS_TUNE_NUM_CPUS: "2"
+    # Bind only to localhost on the host to avoid exposing DB to the internet.
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - quant-network
+
+  redis:
+    image: redis:7.2
+    container_name: quant-redis
+    restart: unless-stopped
+    # Only bind to localhost on the host
+    ports:
+      - "127.0.0.1:6379:6379"
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    networks:
+      - quant-network
+
+  data-fetcher:
+    build: ./data-fetcher
+    container_name: quant-data-fetcher
+    env_file: .env
+    depends_on:
+      - db
+      - redis
+    restart: unless-stopped
+    networks:
+      - quant-network
+    volumes:
+      - ./data-fetcher/src:/app   # 开发模式挂载，便于快速迭代
+
+volumes:
+  postgres_data:
+
+networks:
+  quant-network:
+    driver: bridge

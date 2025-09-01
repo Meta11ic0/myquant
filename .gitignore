@@ -1,0 +1,105 @@
+# .gitignore for personal quant project
+# Purpose: ignore environment-specific files, secrets, build artifacts,
+#         container volumes, caches, and editor/OS noise.
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Dist / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+parts/
+sdist/
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+venv_*/
+
+# pip / wheel caches
+pip-log.txt
+pip-delete-this-directory.txt
+wheels/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Logs and runtime
+*.log
+logs/
+*.pid
+tmp/
+temp/
+
+# --- Environment / secrets ---
+.env
+.env*
+# Keep a .env.example (without secrets) in repo if you want to document env vars
+
+# SSH / keys / certs
+*.pem
+*.key
+*.crt
+id_rsa
+id_rsa.pub
+.ssh/
+
+# --- Docker / Compose ---
+# ignore local compose override files and local docker artifacts
+docker-compose.override.yml
+docker-compose.*.yml
+.docker/
+
+# If you use a host-mounted folder for Postgres data, ignore it
+postgres_data/
+# or other names you might use locally
+*postgres*/
+
+# Ignore built images / local docker caches if present
+*.tar
+
+# --- Databases / generated data ---
+*.sqlite3
+*.db
+data/
+output/
+
+# --- IDEs / editors ---
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# macOS / Windows ---
+.DS_Store
+Thumbs.db
+
+# Editor swap / temp files
+*~
+*.swp
+*.swo
+
+# node / front-end (if any)
+node_modules/
+npm-debug.log
+
+# optional: ignore compiled protobufs / generated code
+*.pb.go
+
+# End of .gitignore
