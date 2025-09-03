@@ -59,6 +59,25 @@ services:
       - quant-network
     volumes:
       - ./data-fetcher/src:/app   # 开发模式挂载，便于快速迭代
+  strategy-bn-btc:
+    build: ./strategy
+    container_name: quant-strategy-binance-btcusdt
+    env_file: .env
+    # 仅依赖 redis（和 db 若你要策略读历史）
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - quant-network
+    # 开发模式下挂载源码以便实时迭代（部署时去掉）
+    volumes:
+      - ./strategy/src:/app
+    environment:
+      # 覆盖 .env 中的默认 symbol/exchange，便于启动多个实例
+      STRAT_EXCHANGE: "binance"
+      STRAT_SYMBOL: "BTC/USDT"
+      STRAT_GROUP: "grp:binance:btcusdt:1m"
+      STRAT_CONSUMER: "consumer_bin_btc_1"
 
 volumes:
   postgres_data:

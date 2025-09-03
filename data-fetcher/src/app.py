@@ -313,27 +313,33 @@ def fetch_and_store_ticker(
   redis_client
 ) -> None:
   """
-  拉取 ticker（实时）并写入 Redis。
-  - ex: ccxt 交易所实例
-  - ex_name, symbol: 元信息
-  - redis_client: redis.Redis 实例
-  行为:
-    - 只写 Redis（轻量）以供 strategy 或监控消费
-    - 如需可选地补写到 Postgres，请在调用处决定
+  拉取 ticker（实时）并写入 Redis：
+    - 写入快照（SET）：最新值，覆盖式，便于快速 GET
+    - 写入 Stream（XADD）：事件流，持久化、可回放，便于策略消费（consumer group）
+  设计要点：
+    - 使用单一字段 "data" 存放 JSON 字符串（兼容性好）
+    - 对每次 fetch 做重试+指数退避
+    - 用 per-symbol stream 名称，便于分流与限长控制
   """
   max_retries = DEFAULT_MAX_RETRIES
   attempt = 0
+
   while attempt < max_retries and running:
     attempt += 1
     try:
-      ticker = ex.fetch_ticker(symbol)            # 拉取 ticker（包含 last/bid/ask/volume）
-      last = safe_get(ticker, "last")             # 最新成交价
-      bid = safe_get(ticker, "bid")               # 买一价
-      ask = safe_get(ticker, "ask")               # 卖一价
-      base_vol = safe_get(ticker, "baseVolume") or safe_get(ticker, "volume")  # 交易量字段命名差异
+      # 1) 从交易所拿 ticker（ccxt 返回不同实现，但通常为 dict）
+      ticker = ex.fetch_ticker(symbol)
 
-      ts = datetime.utcnow().isoformat()          # 使用当前 UTC 时间作为写入时间（标准化）
-      key = f"ticker:{ex_name}:{symbol.replace('/','').lower()}:{TIMEFRAME}"  # Redis key 约定
+      # 2) 从 ticker 中安全提取字段（使用 safe_get 避免 KeyError）
+      last = safe_get(ticker, "last")
+      bid = safe_get(ticker, "bid")
+      ask = safe_get(ticker, "ask")
+      base_vol = safe_get(ticker, "baseVolume") or safe_get(ticker, "volume")
+
+      # 3) 标准化时间戳（使用 UTC ISO 格式，字符串形式便于跨语言）
+      ts = datetime.utcnow().isoformat()
+
+      # 4) 构造 payload（一个 Python dict，准备序列化）
       payload = {
         "exchange": ex_name,
         "symbol": symbol,
@@ -344,15 +350,33 @@ def fetch_and_store_ticker(
         "ask": ask,
         "volume": base_vol
       }
-      # 写入 Redis（字符串化 JSON，方便调试与其它语言读取）
-      redis_client.set(key, json.dumps(payload))
-      logging.debug("%s %s ticker 写入 Redis key=%s", ex_name, symbol, key)
-      # 成功后直接返回
+
+      # ---------------- 写快照（覆盖式） ----------------
+      # 快照 key：ticker:<exchange>:<symbol_no_slash>:<timeframe>
+      snapshot_key = f"ticker:{ex_name}:{symbol.replace('/','').lower()}:{TIMEFRAME}"
+      # 把整个 payload 序列化成 JSON 存为一个字符串（方便直接 GET 后 parse）
+      # 这是覆盖最新状态的方式 —— 非队列，仅保留最新一条
+      redis_client.set(snapshot_key, json.dumps(payload))
+
+      # ---------------- 写 Stream（追加事件） ----------------
+      # stream 名建议按 symbol 拆分，利于消费组管理与限长策略
+      stream_name = f"stream:ticker:{ex_name}:{symbol.replace('/','').lower()}:{TIMEFRAME}"
+      # xadd 的 fields 必须是 map of str->str/bytes. 我们把整个 payload 放到单个字段 "data"
+      # 使用 maxlen 限制流长度，approximate=True 使用更快的修剪策略（~ 表示近似）
+      redis_client.xadd(stream_name, {"data": json.dumps(payload)}, maxlen=10000, approximate=True)
+
+      # 记录 debug 日志
+      logging.debug("写入 Redis snapshot=%s stream=%s payload_last=%s", snapshot_key, stream_name, last)
       return
+
     except Exception as e:
-      wait = RETRY_BACKOFF_BASE ** attempt          # 指数退避
-      logging.warning("%s %s fetch_ticker 失败（%s/%s）：%s，%.1f 秒后重试", ex_name, symbol, attempt, max_retries, type(e).__name__, wait)
+      # 出错时记录并指数退避
+      wait = RETRY_BACKOFF_BASE ** attempt
+      logging.warning("%s %s fetch_ticker 失败（%s/%s）：%s，%.1f 秒后重试",
+                      ex_name, symbol, attempt, max_retries, type(e).__name__, wait)
       time.sleep(wait)
+
+  # 超过重试次数仍失败则记录错误（不抛出）
   logging.error("%s %s fetch_ticker 超过重试次数，放弃本轮", ex_name, symbol)
 
 # ---------------- Main entrypoint ----------------
